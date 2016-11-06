@@ -9,6 +9,8 @@
  - http://arduino.stackexchange.com/questions/6/what-are-or-how-do-i-use-the-power-saving-options-of-the-arduino-to-extend-bat
  - http://www.gammon.com.au/forum/?id=11497
  - http://oregonembedded.com/batterycalc.htm
+ - http://www.fiz-ix.com/2012/11/low-power-arduino-using-the-watchdog-timer/
+ - http://donalmorrissey.blogspot.com.es/2010/04/putting-arduino-diecimila-to-sleep-part.html
 
 
 # TODO:
