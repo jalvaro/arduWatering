@@ -1,24 +1,31 @@
 #include <avr/sleep.h>
-// This library contains functions to set various low-power 
-// states for the ATmega328
+#include <avr/power.h>
+
 
 // TODO:
+// - show time in the 4-digit display
 // - Test battery's life.
-// - Open/close watter with servo or relay
-// - Activate a led while watering
-// - Show remaining time to start watering (using a coded signal through a led)
+//    - Use an Arduino Pro instead?
+//    - http://arduino.stackexchange.com/questions/6/what-are-or-how-do-i-use-the-power-saving-options-of-the-arduino-to-extend-bat
+//    - http://www.gammon.com.au/forum/?id=11497
+//    - http://oregonembedded.com/batterycalc.htm
+// - buy pipes, cube with valve, splitters, battery, pump/solenoid valve, case
+// - Remove Serial references
 
-const int TRIGGER_PIN = 2;
-const int PULSE_PIN = 3;
-const int LED_PIN = 13;
+// Hardware interrupt ports of arduino: digital pin 2 and 3
+const byte INTERRUPT_PIN = 2;
+const byte VALVE_PIN = 4;
+const byte DIGIT_4_LED_PIN = 5;       // TODO: to be replaced by the 4-digit implementation
+const byte LOW_BATTERY_LED_PIN = 13;
 
-const int MINUTES = 60;
-const int HOURS = 60 * MINUTES;
+const long MINUTES = 60L;
+const long HOURS = 60L * MINUTES;
 
-const int WAITING_TIME = 0.5 * MINUTES;   // Waiting time between waking and doing tasks.
+const long WATERING_TIME = 6L * MINUTES;
+const long WAITING_TIME = 24L * HOURS - WATERING_TIME;
+
 const int WAIT_CYCLES = WAITING_TIME/8; // Number of waiting cycles needed before the time defined
                                         // above elapses. Note that this does integer math.
-const int WATERING_TIME = 16;
 const int WATER_CYCLES = WATERING_TIME/8;
 
 // States
@@ -29,26 +36,36 @@ const int WATERING = 1;
 volatile int waitingCycles = 0;
 volatile int wateringCycles = 0;
 
-int currentHours = 0;
+volatile boolean showTime = false;
+ 
 int state = WAITING;
 
 void setup(void) {
-  pinMode(TRIGGER_PIN, OUTPUT);
-  pinMode(LED_PIN, OUTPUT);
+  pinMode(INTERRUPT_PIN, INPUT_PULLUP);
+  pinMode(VALVE_PIN, OUTPUT);
+  pinMode(DIGIT_4_LED_PIN, OUTPUT);
+  pinMode(LOW_BATTERY_LED_PIN, OUTPUT);
   Serial.begin(9600);
   
-  watchdogOn(); // Turn on the watch dog timer.
+  enableWatchdog();
   
   // The following saves some extra power by disabling some peripherals I am not using.
   disableExtraPeripherals();
 }
 
 void loop(void) {
+  if (showTime) showRemainingTime();
+  attachInterrupt(getInterruptPin(), interrupt_isr, FALLING);
   sleepUntilInterruption();
   checkStates();
+  checkBatteryLife();
 }
 
-void watchdogOn() {
+int getInterruptPin() {
+  return digitalPinToInterrupt(INTERRUPT_PIN);
+}
+
+void enableWatchdog() {
   // Clear the reset flag, the WDRF bit (bit 3) of MCUSR.
   MCUSR = MCUSR & B11110111;
     
@@ -67,14 +84,24 @@ void watchdogOn() {
 }
 
 void disableExtraPeripherals() {
+  
   // Disable the ADC by setting the ADEN bit (bit 7) to zero.
-  ADCSRA = ADCSRA & B01111111;
+  // If we disable the ADC we cannot check the battery life
+  // ADCSRA = ADCSRA & B01111111;
+  // power_adc_disable();
   
   // Disable the analog comparator by setting the ACD bit (bit 7) to one.
   ACSR = B10000000;
+  //power_aca_disable();
   
   // Disable digital input buffers on all analog input pins by setting bits 0-5 to one.
   DIDR0 = DIDR0 | B00111111;
+
+  // Disable the Serial Peripheral Interface module.
+  power_spi_disable();
+
+  // Disable the Two Wire Interface module.
+  power_twi_disable();
 }
 
 void sleepUntilInterruption()   {
@@ -85,14 +112,11 @@ void sleepUntilInterruption()   {
   // SLEEP_MODE_PWR_SAVE
   // SLEEP_MODE_STANDBY
   // SLEEP_MODE_PWR_DOWN -the most power savings
-  // I am using the deepest sleep mode from which a watchdog timer interrupt can wake the ATMega328
   
   set_sleep_mode(SLEEP_MODE_PWR_DOWN);
-  sleep_enable();   // Enable sleep mode.
-  sleep_mode();     // Enter sleep mode.
+  sleep_bod_disable();
+  sleep_mode();           // Enter sleep mode.
   // After waking from watchdog interrupt the code continues to execute from this point.
-  
-  sleep_disable();  // Disable sleep mode after waking.
 }
 
 void checkStates() {
@@ -104,22 +128,64 @@ void checkStates() {
 }
 
 void startWatering() {
-    Serial.println("Start watering!");
-    Serial.println(waitingCycles);
-    waitingCycles = 0;
-    state = WATERING;
-    delay(1000);
+  digitalWrite(VALVE_PIN, HIGH);
+  waitingCycles = 0;
+  state = WATERING;
 }
 
 void stopWatering() {
-    Serial.println("Stop watering!");
-    Serial.println(wateringCycles);
-    wateringCycles = 0;
-    state = WAITING;
-    delay(1000);
+  digitalWrite(VALVE_PIN, LOW);
+  wateringCycles = 0;
+  state = WAITING;
+}
+
+void interrupt_isr() {
+  detachInterrupt(getInterruptPin());
+  showTime = true;
+}
+
+void showRemainingTime() {
+  // TODO: prepare integration with 4-digit display
+  digitalWrite (DIGIT_4_LED_PIN, HIGH);
+  delay (1000);
+  digitalWrite (DIGIT_4_LED_PIN, LOW);
+  showTime = false;
 }
 
 ISR(WDT_vect) {
   if (state == WAITING) waitingCycles++;
   else wateringCycles++;
+}
+
+void checkBatteryLife() {
+  // Below 1.8V - cannot operate
+  Serial.println(getBandgap());
+  delay(100);
+
+  if (getBandgap() < 200) {
+    lowBatteryWarning();
+  }
+}
+
+const long InternalReferenceVoltage = 1089;  // Adjust this value to your board's specific internal BG voltage
+ 
+// Code courtesy of "Coding Badly" and "Retrolefty" from the Arduino forum
+// results are Vcc * 100
+// So for example, 5V would be 500.
+int getBandgap() {
+  // REFS0 : Selects AVcc external reference
+  // MUX3 MUX2 MUX1 : Selects 1.1V (VBG)
+  ADMUX = bit (REFS0) | bit (MUX3) | bit (MUX2) | bit (MUX1);
+  ADCSRA |= bit( ADSC );  // start conversion
+  
+  while (ADCSRA & bit (ADSC)) { }  // wait for conversion to complete
+  
+  int results = (((InternalReferenceVoltage * 1024) / ADC) + 5) / 10;
+  return results;
+}
+
+void lowBatteryWarning() {
+  digitalWrite (LOW_BATTERY_LED_PIN, HIGH);
+  delay (5);
+  digitalWrite (LOW_BATTERY_LED_PIN, LOW);
 }
