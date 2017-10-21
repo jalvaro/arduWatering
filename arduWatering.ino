@@ -22,23 +22,23 @@ const long MINUTES = 60L;
 const long HOURS = 60L * MINUTES;
 
 const long WATERING_TIME = 6L * MINUTES;
-const long WAITING_TIME = 24L * HOURS - WATERING_TIME;
+const long SLEEPING_TIME = 24L * HOURS - WATERING_TIME;
 
-const int WAIT_CYCLES = WAITING_TIME/8; // Number of waiting cycles needed before the time defined
+const int SLEEP_CYCLES = SLEEPING_TIME/8; // Number of sleeping cycles needed before the time defined
                                         // above elapses. Note that this does integer math.
 const int WATER_CYCLES = WATERING_TIME/8;
 
 // States
-const int WAITING = 0;
+const int SLEEPING = 0;
 const int WATERING = 1;
 
 // These variables are made volatile because they are changed inside an interrupt function
-volatile int waitingCycles = 0;
+volatile int sleepingCycles = 0;
 volatile int wateringCycles = 0;
 
 volatile boolean showTime = false;
  
-int state = WAITING;
+int state = SLEEPING;
 
 void setup(void) {
   pinMode(INTERRUPT_PIN, INPUT_PULLUP);
@@ -120,7 +120,7 @@ void sleepUntilInterruption()   {
 }
 
 void checkStates() {
-  if (state == WAITING && waitingCycles == WAIT_CYCLES) {
+  if (state == SLEEPING && sleepingCycles == SLEEP_CYCLES) {
     startWatering();
   } else if (state == WATERING && wateringCycles == WATER_CYCLES) {
     stopWatering();
@@ -129,14 +129,14 @@ void checkStates() {
 
 void startWatering() {
   digitalWrite(VALVE_PIN, HIGH);
-  waitingCycles = 0;
+  sleepingCycles = 0;
   state = WATERING;
 }
 
 void stopWatering() {
   digitalWrite(VALVE_PIN, LOW);
   wateringCycles = 0;
-  state = WAITING;
+  state = SLEEPING;
 }
 
 void interrupt_isr() {
@@ -153,7 +153,7 @@ void showRemainingTime() {
 }
 
 ISR(WDT_vect) {
-  if (state == WAITING) waitingCycles++;
+  if (state == SLEEPING) sleepingCycles++;
   else wateringCycles++;
 }
 
