@@ -13,10 +13,11 @@
 // - Remove Serial references
 
 // Hardware interrupt ports of arduino: digital pin 2 and 3
-const byte INTERRUPT_PIN = 2;
-const byte VALVE_PIN = 4;
 const byte DIGIT_4_LED_PIN = 5;       // TODO: to be replaced by the 4-digit implementation
-const byte LOW_BATTERY_LED_PIN = 13;
+#define INTERRUPT_PIN 2
+#define VALVE_PIN 4
+#define LOW_BATTERY_LED_PIN 13
+#define CYCLE_TIME_SECONDS 8
 
 const long MINUTES = 60L;
 const long HOURS = 60L * MINUTES;
@@ -24,9 +25,9 @@ const long HOURS = 60L * MINUTES;
 const long WATERING_TIME = 6L * MINUTES;
 const long SLEEPING_TIME = 24L * HOURS - WATERING_TIME;
 
-const int SLEEP_CYCLES = SLEEPING_TIME/8; // Number of sleeping cycles needed before the time defined
-                                        // above elapses. Note that this does integer math.
-const int WATER_CYCLES = WATERING_TIME/8;
+const int SLEEP_CYCLES = SLEEPING_TIME / CYCLE_TIME_SECONDS;  // Number of sleeping cycles needed before the time defined
+                                                            // above elapses. Note that this does integer math.
+const int WATER_CYCLES = WATERING_TIME / CYCLE_TIME_SECONDS;
 
 // States
 const int SLEEPING = 0;
@@ -36,7 +37,7 @@ const int WATERING = 1;
 volatile int sleepingCycles = 0;
 volatile int wateringCycles = 0;
 
-volatile boolean showTime = false;
+volatile boolean externalInterruption = false;
  
 int state = SLEEPING;
 
@@ -54,7 +55,10 @@ void setup(void) {
 }
 
 void loop(void) {
-  if (showTime) showRemainingTime();
+  if (externalInterruption) {
+    showRemainingTime();
+    externalInterruption = false;
+  }
   attachInterrupt(getInterruptPin(), interrupt_isr, FALLING);
   sleepUntilInterruption();
   checkStates();
@@ -141,7 +145,7 @@ void stopWatering() {
 
 void interrupt_isr() {
   detachInterrupt(getInterruptPin());
-  showTime = true;
+  externalInterruption = true;
 }
 
 void showRemainingTime() {
