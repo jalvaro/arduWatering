@@ -153,7 +153,6 @@ void showRemainingTime() {
   digitalWrite (DIGIT_4_LED_PIN, HIGH);
   delay (1000);
   digitalWrite (DIGIT_4_LED_PIN, LOW);
-  showTime = false;
 }
 
 ISR(WDT_vect) {
