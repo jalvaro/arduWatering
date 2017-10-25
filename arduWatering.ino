@@ -1,5 +1,6 @@
 #include <avr/sleep.h>
 #include <avr/power.h>
+#include <TM1637Display.h>
 
 
 // TODO:
@@ -13,10 +14,11 @@
 // - Remove Serial references
 
 // Hardware interrupt ports of arduino: digital pin 2 and 3
-const byte DIGIT_4_LED_PIN = 5;       // TODO: to be replaced by the 4-digit implementation
 #define INTERRUPT_PIN 2
 #define VALVE_PIN 4
-#define LOW_BATTERY_LED_PIN 13
+#define TM1637_CLK_PIN 5
+#define TM1637_DIO_PIN 6
+
 #define CYCLE_TIME_SECONDS 8
 
 const long MINUTES = 60L;
@@ -33,6 +35,20 @@ const int WATER_CYCLES = WATERING_TIME / CYCLE_TIME_SECONDS;
 const int SLEEPING = 0;
 const int WATERING = 1;
 
+// DISPLAY
+const uint8_t FULL = SEG_A | SEG_B | SEG_C | SEG_D | SEG_E | SEG_F | SEG_G;
+const uint8_t HALF = SEG_C | SEG_D | SEG_E | SEG_G;
+const uint8_t NONE = 0;
+const uint8_t OFF[] = { NONE, NONE, NONE, NONE };
+const uint8_t BATTERY_100[] = { FULL, FULL, FULL, FULL };
+const uint8_t BATTERY_87[] =  { HALF, FULL, FULL, FULL };
+const uint8_t BATTERY_75[] =  { NONE, FULL, FULL, FULL };
+const uint8_t BATTERY_62[] =  { NONE, HALF, FULL, FULL };
+const uint8_t BATTERY_50[] =  { NONE, NONE, FULL, FULL };
+const uint8_t BATTERY_37[] =  { NONE, NONE, HALF, FULL };
+const uint8_t BATTERY_25[] =  { NONE, NONE, NONE, FULL };
+const uint8_t BATTERY_12[] =  { NONE, NONE, NONE, HALF };
+
 // These variables are made volatile because they are changed inside an interrupt function
 volatile int sleepingCycles = 0;
 volatile int wateringCycles = 0;
@@ -41,12 +57,13 @@ volatile boolean externalInterruption = false;
  
 int state = SLEEPING;
 
+TM1637Display display(TM1637_CLK_PIN, TM1637_DIO_PIN);
+
 void setup(void) {
   pinMode(INTERRUPT_PIN, INPUT_PULLUP);
   pinMode(VALVE_PIN, OUTPUT);
-  pinMode(DIGIT_4_LED_PIN, OUTPUT);
-  pinMode(LOW_BATTERY_LED_PIN, OUTPUT);
   Serial.begin(9600);
+  display.setBrightness(7);
   
   enableWatchdog();
   
@@ -57,12 +74,12 @@ void setup(void) {
 void loop(void) {
   if (externalInterruption) {
     showRemainingTime();
+    showBatteryStatus();
     externalInterruption = false;
   }
   attachInterrupt(getInterruptPin(), interrupt_isr, FALLING);
   sleepUntilInterruption();
   checkStates();
-  checkBatteryLife();
 }
 
 int getInterruptPin() {
@@ -148,29 +165,12 @@ void interrupt_isr() {
   externalInterruption = true;
 }
 
-void showRemainingTime() {
-  // TODO: prepare integration with 4-digit display
-  digitalWrite (DIGIT_4_LED_PIN, HIGH);
-  delay (1000);
-  digitalWrite (DIGIT_4_LED_PIN, LOW);
-}
-
 ISR(WDT_vect) {
   if (state == SLEEPING) sleepingCycles++;
   else wateringCycles++;
 }
 
-void checkBatteryLife() {
-  // Below 1.8V - cannot operate
-  Serial.println(getBandgap());
-  delay(100);
-
-  if (getBandgap() < 200) {
-    lowBatteryWarning();
-  }
-}
-
-const long InternalReferenceVoltage = 1089;  // Adjust this value to your board's specific internal BG voltage
+const long InternalReferenceVoltage = 1099;  // Adjust this value to your board's specific internal BG voltage
  
 // Code courtesy of "Coding Badly" and "Retrolefty" from the Arduino forum
 // results are Vcc * 100
@@ -187,8 +187,53 @@ int getBandgap() {
   return results;
 }
 
-void lowBatteryWarning() {
-  digitalWrite (LOW_BATTERY_LED_PIN, HIGH);
-  delay (5);
-  digitalWrite (LOW_BATTERY_LED_PIN, LOW);
+void showRemainingTime() {
+  long remainingCycles = SLEEP_CYCLES - sleepingCycles;
+  long remainingSeconds = remainingCycles * CYCLE_TIME_SECONDS;
+
+  int hours = remainingSeconds / HOURS;
+  int minutes = (remainingSeconds / MINUTES) % MINUTES;
+
+  int num = hours * 100 + minutes;
+  
+  display.showNumberDecEx(num, (0x80 >> 1));
+  delay(1200);
+  display.setSegments(OFF);
 }
+
+void showBatteryStatus() {
+  uint8_t batteryStatus[4];
+
+  getBatteryStatus(batteryStatus);
+  
+  for (int i=0; i<3; i++) {
+    display.setSegments(batteryStatus);
+    delay(200);
+    display.setSegments(OFF);
+    delay(100);
+  }
+}
+
+void getBatteryStatus(uint8_t batteryStatus[]) {
+  int bandgap = getBandgap();
+
+  // Below 1.8V - cannot operate
+  int normalizedMargin = ((bandgap - 180) * 100) / 320;
+
+  if (normalizedMargin > 87)      getDisplayUint(batteryStatus, FULL, FULL, FULL, FULL);
+  else if (normalizedMargin > 75) getDisplayUint(batteryStatus, HALF, FULL, FULL, FULL);
+  else if (normalizedMargin > 62) getDisplayUint(batteryStatus, NONE, FULL, FULL, FULL);
+  else if (normalizedMargin > 50) getDisplayUint(batteryStatus, NONE, HALF, FULL, FULL);
+  else if (normalizedMargin > 37) getDisplayUint(batteryStatus, NONE, NONE, FULL, FULL);
+  else if (normalizedMargin > 25) getDisplayUint(batteryStatus, NONE, NONE, HALF, FULL);
+  else if (normalizedMargin > 12) getDisplayUint(batteryStatus, NONE, NONE, NONE, FULL);
+  else                            getDisplayUint(batteryStatus, NONE, NONE, NONE, HALF);
+}
+
+void getDisplayUint(uint8_t displayUint[], uint8_t display0, uint8_t display1, uint8_t display2, uint8_t display3) {
+  displayUint[0] = display0;
+  displayUint[1] = display1;
+  displayUint[2] = display2;
+  displayUint[3] = display3;
+}
+
